@@ -1,61 +1,55 @@
 import json
-import os
 import boto3
-from datetime import datetime
+import logging
+from datetime import datetime, timezone
 
-s3 = boto3.client('s3')
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
 
-def lambda_handler(event, context):
+s3_client = boto3.client("s3")
+
+
+def handler(event, context):
     """
-    extracts metadata from S3 upload events received via SNS.
-    logs file information to CloudWatch and writes a JSON metadata
-    file to the processed/metadata/ prefix in the same bucket.
+    Triggered via SNS which wraps an S3 event notification.
+    Extracts file metadata, logs it, and writes a JSON file to processed/metadata/.
+    """
+    for record in event["Records"]:
+        # Parse nested SNS -> S3 event
+        sns_message = json.loads(record["Sns"]["Message"])
 
-    event structure (SNS wraps the S3 event):
-    {
-        "Records": [{
-            "Sns": {
-                "Message": "{\"Records\":[{\"s3\":{...}}]}"  # this is a JSON string!
+        for s3_record in sns_message["Records"]:
+            bucket = s3_record["s3"]["bucket"]["name"]
+            key = s3_record["s3"]["object"]["key"]
+            size = s3_record["s3"]["object"].get("size", 0)
+            event_time = s3_record["eventTime"]
+
+            # Log in required [METADATA] format
+            logger.info(f"[METADATA] File: {key}")
+            logger.info(f"[METADATA] Bucket: {bucket}")
+            logger.info(f"[METADATA] Size: {size} bytes")
+            logger.info(f"[METADATA] Upload Time: {event_time}")
+
+            # Build metadata JSON
+            metadata = {
+                "file": key,
+                "bucket": bucket,
+                "size": size,
+                "upload_time": event_time,
             }
-        }]
-    }
 
-    required log format:
-        [METADATA] File: {key}
-        [METADATA] Bucket: {bucket}
-        [METADATA] Size: {size} bytes
-        [METADATA] Upload Time: {timestamp}
+            # Write JSON to processed/metadata/{filename}.json
+            filename = key.split("/")[-1]
+            base_name = filename.rsplit(".", 1)[0]
+            output_key = f"processed/metadata/{base_name}.json"
 
-    required S3 output:
-        writes a JSON file to processed/metadata/{filename}.json containing:
-        {
-            "file": "{key}",
-            "bucket": "{bucket}",
-            "size": {size},
-            "upload_time": "{timestamp}"
-        }
-    """
+            s3_client.put_object(
+                Bucket=bucket,
+                Key=output_key,
+                Body=json.dumps(metadata),
+                ContentType="application/json",
+            )
 
-    print("=== metadata extractor invoked ===")
+            logger.info(f"[METADATA] Wrote metadata to {output_key}")
 
-    # todo: loop through event['Records']
-    # todo: for each record, get the SNS message string from record['Sns']['Message']
-    # todo: parse the SNS message string as JSON to get the S3 event
-    # todo: loop through the S3 event's 'Records'
-    # todo: extract bucket name from s3_record['s3']['bucket']['name']
-    # todo: extract object key from s3_record['s3']['object']['key']
-    # todo: extract file size from s3_record['s3']['object']['size']
-    # todo: extract event time from s3_record['eventTime']
-    # todo: print metadata in the required [METADATA] format:
-    #       print(f"[METADATA] File: {key}")
-    #       print(f"[METADATA] Bucket: {bucket}")
-    #       print(f"[METADATA] Size: {size} bytes")
-    #       print(f"[METADATA] Upload Time: {event_time}")
-    # todo: build a metadata dict with file, bucket, size, upload_time
-    # todo: get the filename from the key (e.g. "uploads/test.jpg" -> "test")
-    #       hint: use os.path.splitext(key.split('/')[-1])[0]
-    # todo: write the metadata dict as JSON to s3 at processed/metadata/{filename}.json
-    #       hint: s3.put_object(Bucket=bucket, Key=f"processed/metadata/{filename}.json",
-    #             Body=json.dumps(metadata), ContentType='application/json')
-
-    return {'statusCode': 200, 'body': 'metadata extracted'}
+    return {"statusCode": 200, "body": "Metadata extraction complete"}
