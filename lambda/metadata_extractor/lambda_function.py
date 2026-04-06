@@ -1,55 +1,42 @@
 import json
+import os
 import boto3
-import logging
-from datetime import datetime, timezone
+from datetime import datetime
 
-logger = logging.getLogger()
-logger.setLevel(logging.INFO)
+s3 = boto3.client('s3')
 
-s3_client = boto3.client("s3")
+def lambda_handler(event, context):
+    print("=== metadata extractor invoked ===")
 
+    for record in event['Records']:
+        sns_message = record['Sns']['Message']
+        s3_event = json.loads(sns_message)
 
-def handler(event, context):
-    """
-    Triggered via SNS which wraps an S3 event notification.
-    Extracts file metadata, logs it, and writes a JSON file to processed/metadata/.
-    """
-    for record in event["Records"]:
-        # Parse nested SNS -> S3 event
-        sns_message = json.loads(record["Sns"]["Message"])
+        for s3_record in s3_event['Records']:
+            bucket = s3_record['s3']['bucket']['name']
+            key = s3_record['s3']['object']['key']
+            size = s3_record['s3']['object']['size']
+            event_time = s3_record['eventTime']
 
-        for s3_record in sns_message["Records"]:
-            bucket = s3_record["s3"]["bucket"]["name"]
-            key = s3_record["s3"]["object"]["key"]
-            size = s3_record["s3"]["object"].get("size", 0)
-            event_time = s3_record["eventTime"]
+            print(f"[METADATA] File: {key}")
+            print(f"[METADATA] Bucket: {bucket}")
+            print(f"[METADATA] Size: {size} bytes")
+            print(f"[METADATA] Upload Time: {event_time}")
 
-            # Log in required [METADATA] format
-            logger.info(f"[METADATA] File: {key}")
-            logger.info(f"[METADATA] Bucket: {bucket}")
-            logger.info(f"[METADATA] Size: {size} bytes")
-            logger.info(f"[METADATA] Upload Time: {event_time}")
-
-            # Build metadata JSON
             metadata = {
                 "file": key,
                 "bucket": bucket,
                 "size": size,
-                "upload_time": event_time,
+                "upload_time": event_time
             }
 
-            # Write JSON to processed/metadata/{filename}.json
-            filename = key.split("/")[-1]
-            base_name = filename.rsplit(".", 1)[0]
-            output_key = f"processed/metadata/{base_name}.json"
+            filename = os.path.splitext(key.split('/')[-1])[0]
 
-            s3_client.put_object(
+            s3.put_object(
                 Bucket=bucket,
-                Key=output_key,
+                Key=f"processed/metadata/{filename}.json",
                 Body=json.dumps(metadata),
-                ContentType="application/json",
+                ContentType='application/json'
             )
 
-            logger.info(f"[METADATA] Wrote metadata to {output_key}")
-
-    return {"statusCode": 200, "body": "Metadata extraction complete"}
+    return {'statusCode': 200, 'body': 'metadata extracted'}

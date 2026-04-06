@@ -1,50 +1,37 @@
 import json
+import os
 import boto3
-import logging
 
-logger = logging.getLogger()
-logger.setLevel(logging.INFO)
+s3 = boto3.client('s3')
 
-s3_client = boto3.client("s3")
+VALID_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.gif']
 
-VALID_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".tiff", ".svg"}
+def is_valid_image(key):
+    _, ext = os.path.splitext(key.lower())
+    return ext in VALID_EXTENSIONS
 
+def lambda_handler(event, context):
+    print("=== image validator invoked ===")
 
-def handler(event, context):
-    """
-    Triggered via SNS which wraps an S3 event notification.
-    Validates the file extension. Valid images are copied to processed/valid/.
-    Invalid files raise an exception so the invocation fails and hits the DLQ.
-    """
-    for record in event["Records"]:
-        # Parse nested SNS -> S3 event
-        sns_message = json.loads(record["Sns"]["Message"])
+    for record in event['Records']:
+        sns_message = record['Sns']['Message']
+        s3_event = json.loads(sns_message)
 
-        for s3_record in sns_message["Records"]:
-            bucket = s3_record["s3"]["bucket"]["name"]
-            key = s3_record["s3"]["object"]["key"]
-            filename = key.split("/")[-1]
+        for s3_record in s3_event['Records']:
+            bucket = s3_record['s3']['bucket']['name']
+            key = s3_record['s3']['object']['key']
 
-            # Check file extension
-            ext = ""
-            if "." in filename:
-                ext = "." + filename.rsplit(".", 1)[1].lower()
+            if is_valid_image(key):
+                print(f"[VALID] {key} is a valid image file")
 
-            if ext in VALID_EXTENSIONS:
-                logger.info(f"[VALID] {key} is a valid image file")
-
-                copy_source = {"Bucket": bucket, "Key": key}
-                dest_key = f"processed/valid/{filename}"
-
-                s3_client.copy_object(
+                filename = key.split('/')[-1]
+                s3.copy_object(
                     Bucket=bucket,
-                    Key=dest_key,
-                    CopySource=copy_source,
+                    Key=f"processed/valid/{filename}",
+                    CopySource={'Bucket': bucket, 'Key': key}
                 )
-
-                logger.info(f"[VALID] Copied to {dest_key}")
             else:
-                logger.error(f"[INVALID] {key} is not a valid image type")
+                print(f"[INVALID] {key} is not a valid image type")
                 raise ValueError(f"Invalid file type: {key}")
 
-    return {"statusCode": 200, "body": "Validation complete"}
+    return {'statusCode': 200, 'body': 'validation complete'}
